@@ -56,9 +56,7 @@ def Main(Arguments: list[str] | None = None) -> int:
             def Report(Done: int, Total: int) -> None:
                 nonlocal LastPercent
                 Percent = Done * 100 // Total if Total else 100
-                if Percent != LastPercent and (
-                    Percent % 5 == 0 or Done == Total
-                ):
+                if Percent != LastPercent and (Percent % 5 == 0 or Done == Total):
                     logger.info(
                         f"{Source.name}: {Percent:3d}%",
                     )
