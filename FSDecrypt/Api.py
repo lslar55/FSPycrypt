@@ -23,7 +23,7 @@ def DecryptFile(
     Iv: bytes | None = None,
     KeyDirectory: PathType | None = None,
     Overwrite: bool = False,
-    ChunkSize: int = 1024 * 1024,
+    ChunkSize: int = 16 * 1024 * 1024,
     Progress: ProgressCallback | None = None,
 ) -> Path:
     if ChunkSize <= 0:

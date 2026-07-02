@@ -180,7 +180,7 @@ class NtfsVolume:
         try:
             with Node.Record.open() as Source, Destination.open("xb") as Output:
                 while True:
-                    Data = Source.read(1024 * 1024)
+                    Data = Source.read(4 * 1024 * 1024)
                     if not Data:
                         break
                     Output.write(Data)

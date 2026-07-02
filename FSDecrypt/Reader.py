@@ -5,6 +5,9 @@ import os
 from pathlib import Path
 from typing import BinaryIO, cast
 
+from Crypto.Cipher import AES
+from Crypto.Util.strxor import strxor
+
 from .Crypto import PageSize, CalculateFileIv, CalculatePageIv, DecryptCbc
 from .Errors import InvalidContainerError, MissingKeyError
 from .Keys import (
@@ -72,6 +75,7 @@ class FSDecryptReader(io.BufferedIOBase):
             Resolved = self._ResolveKeys(Key, Iv, KeyDirectory)
             self._Key = Resolved.Key
             self._Iv = self._ResolveIv(Resolved.Iv, Iv is not None)
+            self._BlockCipher = AES.new(self._Key, AES.MODE_ECB)
 
             self._Stream.seek(0, io.SEEK_END)
             PhysicalSize = self._Stream.tell()
@@ -142,26 +146,42 @@ class FSDecryptReader(io.BufferedIOBase):
         )
         return CalculateFileIv(self._Key, Header, FirstPage)
 
+    def _DecryptPages(self, Encrypted: bytes, FirstPageIndex: int) -> bytes:
+        if len(Encrypted) % AES.block_size:
+            raise InvalidContainerError(
+                "encrypted data length must be a multiple of 16"
+            )
+        Chain = bytearray(len(Encrypted))
+        if len(Encrypted) > AES.block_size:
+            Chain[AES.block_size :] = Encrypted[: -AES.block_size]
+        FirstPageOffset = FirstPageIndex * PageSize
+        for Start in range(0, len(Encrypted), PageSize):
+            PageIv = CalculatePageIv(FirstPageOffset + Start, self._Iv)
+            Chain[Start : Start + AES.block_size] = PageIv
+        Decrypted = self._BlockCipher.decrypt(Encrypted)
+        return strxor(Decrypted, Chain)
+
+    def _ReadPages(self, FirstPageIndex: int, LastPageIndex: int) -> bytes:
+        FirstPageOffset = FirstPageIndex * PageSize
+        Remaining = self.BootId.PlaintextSize - FirstPageOffset
+        if Remaining <= 0:
+            return b""
+        RequestedSize = (LastPageIndex - FirstPageIndex + 1) * PageSize
+        EncryptedSize = min(RequestedSize, Remaining)
+        self._Stream.seek(self.BootId.DataOffset + FirstPageOffset)
+        Encrypted = self._Stream.read(EncryptedSize)
+        if len(Encrypted) != EncryptedSize:
+            raise InvalidContainerError("container ended inside encrypted pages")
+        Plaintext = self._DecryptPages(Encrypted, FirstPageIndex)
+        LastPageStart = (LastPageIndex - FirstPageIndex) * PageSize
+        self._PageIndex = LastPageIndex
+        self._Page = Plaintext[LastPageStart : LastPageStart + PageSize]
+        return Plaintext
+
     def _LoadPage(self, PageIndex: int) -> bytes:
         if self._PageIndex == PageIndex:
             return self._Page
-        PageOffset = PageIndex * PageSize
-        Remaining = self.BootId.PlaintextSize - PageOffset
-        if Remaining <= 0:
-            return b""
-        EncryptedSize = min(PageSize, Remaining)
-        self._Stream.seek(self.BootId.DataOffset + PageOffset)
-        Encrypted = self._Stream.read(EncryptedSize)
-        if len(Encrypted) != EncryptedSize:
-            raise InvalidContainerError("container ended inside an encrypted page")
-        try:
-            PageIv = CalculatePageIv(PageOffset, self._Iv)
-            Plaintext = DecryptCbc(Encrypted, self._Key, PageIv)
-        except ValueError as Error:
-            raise InvalidContainerError(str(Error)) from Error
-        self._PageIndex = PageIndex
-        self._Page = Plaintext
-        return Plaintext
+        return self._ReadPages(PageIndex, PageIndex)
 
     def readable(self) -> bool:
         return True
@@ -201,18 +221,20 @@ class FSDecryptReader(io.BufferedIOBase):
         else:
             Size = min(Size, Remaining)
 
-        Chunks: list[bytes] = []
-        Left = Size
-        while Left:
-            PageIndex, PageOffset = divmod(self._Position, PageSize)
-            Page = self._LoadPage(PageIndex)
-            Count = min(Left, len(Page) - PageOffset)
-            if Count <= 0:
-                raise InvalidContainerError("decrypted page is unexpectedly short")
-            Chunks.append(Page[PageOffset : PageOffset + Count])
-            self._Position += Count
-            Left -= Count
-        return b"".join(Chunks)
+        FirstPageIndex, FirstPageOffset = divmod(self._Position, PageSize)
+        LastPosition = self._Position + Size - 1
+        LastPageIndex = LastPosition // PageSize
+
+        if FirstPageIndex == LastPageIndex and self._PageIndex == FirstPageIndex:
+            Data = self._Page[FirstPageOffset : FirstPageOffset + Size]
+        else:
+            Pages = self._ReadPages(FirstPageIndex, LastPageIndex)
+            Data = Pages[FirstPageOffset : FirstPageOffset + Size]
+
+        if len(Data) != Size:
+            raise InvalidContainerError("decrypted range is unexpectedly short")
+        self._Position += len(Data)
+        return Data
 
     def readinto(self, Buffer: bytearray | memoryview) -> int:
         Data = self.read(len(Buffer))
