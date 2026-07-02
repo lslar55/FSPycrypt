@@ -3,7 +3,8 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-import sys
+
+from loguru import logger
 
 from .Api import DecryptFile, ExtractFiles
 from .Errors import FSDecryptError
@@ -42,7 +43,7 @@ def Main(Arguments: list[str] | None = None) -> int:
     try:
         for Source in Values.Files:
             if Values.Info:
-                print(
+                logger.info(
                     json.dumps(
                         InspectContainer(Source).AsDictionary(),
                         ensure_ascii=False,
@@ -58,10 +59,8 @@ def Main(Arguments: list[str] | None = None) -> int:
                 if Percent != LastPercent and (
                     Percent % 5 == 0 or Done == Total
                 ):
-                    print(
-                        f"\r{Source.name}: {Percent:3d}%",
-                        end="",
-                        file=sys.stderr,
+                    logger.info(
+                        f"{Source.name}: {Percent:3d}%",
                     )
                     LastPercent = Percent
 
@@ -81,10 +80,10 @@ def Main(Arguments: list[str] | None = None) -> int:
                     Overwrite=Values.Overwrite,
                     Progress=Report,
                 )
-            print(file=sys.stderr)
-            print(Output)
+            logger.info("")
+            logger.info(Output)
     except (FSDecryptError, OSError, ValueError) as Error:
-        print(f"FSDecrypt: {Error}", file=sys.stderr)
+        logger.error(f"FSDecrypt: {Error}")
         return 1
     return 0
 

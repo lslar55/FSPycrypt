@@ -1,6 +1,7 @@
 import argparse
-import sys
 from pathlib import Path
+
+from loguru import logger
 
 from FSDecrypt import (
     BootId,
@@ -45,23 +46,23 @@ def CreateProgress(Label: str):
         nonlocal LastPercent
         Percent = Done * 100 // Total if Total else 100
         if Percent != LastPercent:
-            print(f"\r{Label}: {Percent:3d}%", end="", flush=True)
+            logger.info(f"{Label}: {Percent:3d}%")
             LastPercent = Percent
 
     return Progress
 
 
 def PrintResult(Result: Path) -> None:
-    print(f"输出位置：{Result}")
+    logger.info(f"输出位置：{Result}")
     if not Result.is_dir():
-        print(f"文件大小：{FormatSize(Result.stat().st_size)}")
+        logger.info(f"文件大小：{FormatSize(Result.stat().st_size)}")
         return
     Directories = sum(1 for Item in Result.rglob("*") if Item.is_dir())
     Files = [Item for Item in Result.rglob("*") if Item.is_file()]
     TotalSize = sum(Item.stat().st_size for Item in Files)
-    print(f"目录数量：{Directories}")
-    print(f"文件数量：{len(Files)}")
-    print(f"文件总大小：{FormatSize(TotalSize)}")
+    logger.info(f"目录数量：{Directories}")
+    logger.info(f"文件数量：{len(Files)}")
+    logger.info(f"文件总大小：{FormatSize(TotalSize)}")
 
 
 def CreateParser() -> argparse.ArgumentParser:
@@ -78,7 +79,7 @@ def Main(Arguments: list[str] | None = None) -> int:
     Values = CreateParser().parse_args(Arguments)
     InputFile = Values.InputFile.resolve()
     if not InputFile.is_file():
-        print(f"找不到输入文件：{InputFile}", file=sys.stderr)
+        logger.error(f"找不到输入文件：{InputFile}")
         return 1
     OutputPath = Values.OutputPath.resolve() if Values.OutputPath else None
     try:
@@ -98,11 +99,11 @@ def Main(Arguments: list[str] | None = None) -> int:
                 Overwrite=Values.Overwrite,
                 Progress=CreateProgress("提取文件"),
             )
-        print()
+        logger.info("")
         PrintResult(Result)
         return 0
     except (FSDecryptError, OSError, ValueError) as Error:
-        print(f"处理失败：{Error}", file=sys.stderr)
+        logger.error(f"处理失败：{Error}")
         return 1
 
 

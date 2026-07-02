@@ -13,6 +13,7 @@ authors = [{ name = "beerpsi and contributors" }]
 dependencies = [
     "dissect.hypervisor>=3.21,<4",
     "dissect.ntfs>=3.16,<4",
+    "loguru>=0.7",
     "pycryptodome>=3.20",
 ]
 
