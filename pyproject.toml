@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "FSDecrypt"
+version = "0.2.0"
+description = "Python library for reading and decrypting SEGA fscrypt containers"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "0BSD"
+authors = [{ name = "beerpsi and contributors" }]
+dependencies = [
+    "dissect.hypervisor>=3.21,<4",
+    "dissect.ntfs>=3.16,<4",
+    "pycryptodome>=3.20",
+]
+
+[project.scripts]
+fsdecrypt = "Decrypt:Main"
+
+[project.urls]
+Upstream = "https://gitea.tendokyu.moe/beerpsi/fsdecrypt"
+
+[tool.setuptools.packages.find]
+include = ["FSDecrypt*"]
+
+[tool.setuptools]
+py-modules = ["Decrypt", "fsdecrypt"]
