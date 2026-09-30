@@ -82,29 +82,30 @@ def ExtractTree(OutputDirectory: PathType, Nodes: Sequence[ExtractNode], ...) ->
 
 ## 6. 测试与验证
 
-回归测试位于 `tests/`，纯标准库 `unittest`，**不引入 pytest 或任何新依赖**：
+本仓库**不提交测试套件**，`tests/` 曾被有意删除，不要重新引入测试目录、测试框架
+或 `pytest` / `unittest` 依赖。
 
 ```powershell
-python -m unittest discover -s tests -v
-python -m ruff check FSDecrypt tests
+python -m ruff check FSDecrypt
 ```
 
 规范：
 
-- 测试数据必须**合成**。真实容器（`.pack`/`.app`/`.opt`/`.vhd`/`.ntfs`）、密钥文件、
-  提取产物一律不得提交进仓库，也不得写进 `tests/`。
-- 涉及字节布局的逻辑（VHD、BootID、exFAT 目录项、IV 推导）必须补合成测试：
-  自己构造字节流断言解析结果，而不是依赖固件样本。
-- 改 `Vhd.py` 后至少跑通 `tests/test_fsdecrypt.py` 里的链式合并用例；改 `Extract.py`
-  或 `Api.py` 后至少保证 `python -m unittest discover -s tests` 全绿。
-- 拿真实容器做端到端验证时，输出目录要放在仓库外的临时位置或已被 `.git/info/exclude`
-  排除的目录，验证完删掉；不要把它们 `git add` 进来。
+- 需要验证时，写一次性的临时脚本，跑完即删；脚本不得提交进仓库。
+- 涉及字节布局的逻辑（VHD、BootID、exFAT 目录项、IV 推导）必须用**合成字节流**
+  验证：自己构造字节流并断言解析结果，不要依赖固件样本。
+- 真实容器（`.pack`/`.app`/`.opt`/`.vhd`/`.ntfs`）、密钥文件、提取产物一律不得提交
+  进仓库。做端到端验证时，输出目录放在仓库外或已被 `.git/info/exclude` 排除的目录，
+  验证完删掉，不要 `git add` 进来。
+- 改 `Vhd.py` 时，重点验证差分链：父子 GUID 匹配、多层优先级、部分扇区位图的跨扇区
+  读、跨块连续读、虚拟容量截断。
 
 ## 7. Git 约定
 
 - 提交信息用中文，类型前缀沿用现状：`chore:` / `refactor:` / `feat:` / `fix:` / `docs:`。
 - 一次提交只做一件事，保持原子性；重构与功能改动不要混在同一个提交里。
-- 只做本地提交，**不要** `git push`，**不要** rebase / force-push 已有历史。
+- 除非用户明确要求，否则只做本地提交，**不要** `git push`；任何情况下都**不要**
+  rebase 或 force-push 已有历史。
 - 不要把 `__pycache__/`、构建产物、临时验证目录加入版本控制；临时目录写进
   `.git/info/exclude`，不要污染 `.gitignore`。
 
@@ -140,8 +141,8 @@ python -m ruff check FSDecrypt tests
 
 一个改动算完成，需要同时满足：
 
-1. `python -m ruff check FSDecrypt tests` 无告警；
-2. `python -m unittest discover -s tests -v` 全绿；
-3. 新增/修改的字节级逻辑有对应的合成测试；
-4. `README.md` 中受影响的用法示例已同步（README 面向人类读者）；
-5. 仓库里没有新增多余文件：没有 CLI、没有临时目录、没有厂商容器、没有 `__pycache__`。
+1. `python -m ruff check FSDecrypt` 无告警；
+2. 改动的字节级逻辑已用一次性合成脚本验证过（脚本本身不留仓库）；
+3. `README.md` 中受影响的用法示例已同步（README 面向人类读者）；
+4. 仓库里没有新增多余文件：没有 CLI、没有测试目录、没有临时脚本或目录、
+   没有厂商容器、没有 `__pycache__`。

@@ -210,19 +210,17 @@ FSDecrypt/
   Util.py      路径、命名、时间戳等公共工具
   Errors.py    异常类型
   _version.py  版本号单一来源
-tests/         纯逻辑回归测试（合成数据，不含任何厂商容器）
 ```
 
 ## 开发
 
 ```powershell
 python -m pip install -e .
-python -m unittest discover -s tests -v   # 回归测试
-python -m ruff check FSDecrypt tests      # 静态检查
+python -m ruff check FSDecrypt     # 静态检查
 ```
 
-测试不依赖任何真实容器，全部使用合成数据。真实容器体积大且含厂商版权内容，
-请勿提交进仓库。
+本仓库不包含测试套件。涉及字节布局的改动请用合成数据写一次性脚本自行验证，
+真实的厂商容器体积大、含版权内容，请勿提交进仓库。
 
 ## 许可证
 
