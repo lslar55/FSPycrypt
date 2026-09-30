@@ -4,18 +4,13 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import io
 import math
-import os
 from pathlib import Path
-import shutil
 import struct
-import tempfile
-from typing import BinaryIO, Callable
-import uuid
+from typing import BinaryIO
 
 from .Errors import InvalidExfatError
-
-
-ProgressCallback = Callable[[int, int], None]
+from .Extract import ExtractTree
+from .Util import PathType, ProgressCallback, SetFileTimes
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +33,18 @@ class ExfatEntry:
 class ExfatNode:
     Entry: ExfatEntry
     Children: tuple["ExfatNode", ...]
+
+    @property
+    def Name(self) -> str:
+        return self.Entry.Name
+
+    @property
+    def IsDirectory(self) -> bool:
+        return self.Entry.IsDirectory
+
+    @property
+    def Size(self) -> int:
+        return self.Entry.DataLength
 
 
 def _ReadExact(Stream: BinaryIO, Offset: int, Size: int) -> bytes:
@@ -91,51 +98,6 @@ def _SetChecksum(Data: bytes) -> int:
             ((Checksum & 1) << 15) + (Checksum >> 1) + Value
         ) & 0xFFFF
     return Checksum
-
-
-def _SafeName(Name: str) -> str:
-    if Name in (".", ".."):
-        raise InvalidExfatError(f"unsafe exFAT name: {Name!r}")
-    InvalidCharacters = '<>:"/\\|?*'
-    Result = "".join(
-        "_" if ord(Character) < 32 or Character in InvalidCharacters else Character
-        for Character in Name
-    ).rstrip(" .")
-    if not Result:
-        Result = "_"
-    Stem = Result.split(".", 1)[0].upper()
-    Reserved = {"CON", "PRN", "AUX", "NUL"}
-    Reserved.update(f"COM{Index}" for Index in range(1, 10))
-    Reserved.update(f"LPT{Index}" for Index in range(1, 10))
-    if Stem in Reserved:
-        Result = f"_{Result}"
-    return Result
-
-
-def _UniqueName(Name: str, UsedNames: set[str]) -> str:
-    Candidate = _SafeName(Name)
-    Key = Candidate.casefold()
-    if Key not in UsedNames:
-        UsedNames.add(Key)
-        return Candidate
-    PathValue = Path(Candidate)
-    Counter = 2
-    while True:
-        Candidate = f"{PathValue.stem} ({Counter}){PathValue.suffix}"
-        Key = Candidate.casefold()
-        if Key not in UsedNames:
-            UsedNames.add(Key)
-            return Candidate
-        Counter += 1
-
-
-def _RemovePath(PathValue: Path) -> None:
-    if not PathValue.exists():
-        return
-    if PathValue.is_dir():
-        shutil.rmtree(PathValue)
-    else:
-        PathValue.unlink()
 
 
 class ExfatVolume:
@@ -398,12 +360,13 @@ class ExfatVolume:
 
     def _WriteFile(
         self,
-        Entry: ExfatEntry,
+        Node: ExfatNode,
         Destination: Path,
         State: list[int],
         Total: int,
         Progress: ProgressCallback | None,
     ) -> None:
+        Entry = Node.Entry
         RemainingValid = Entry.ValidDataLength
         RemainingTotal = Entry.DataLength
         with Destination.open("xb") as Output:
@@ -426,100 +389,28 @@ class ExfatVolume:
                     Progress(State[0], Total)
                 if RemainingTotal == 0:
                     break
-        self._SetTimes(Destination, Entry)
+        self._SetTimes(Destination, Node)
 
-    def _SetTimes(self, Destination: Path, Entry: ExfatEntry) -> None:
-        Modified = Entry.ModifiedTime
-        Accessed = Entry.AccessedTime
-        if Modified is None and Accessed is None:
-            return
-        Current = Destination.stat()
-        os.utime(
+    def _SetTimes(self, Destination: Path, Node: ExfatNode) -> None:
+        SetFileTimes(
             Destination,
-            (
-                Accessed if Accessed is not None else Current.st_atime,
-                Modified if Modified is not None else Current.st_mtime,
-            ),
+            Node.Entry.AccessedTime,
+            Node.Entry.ModifiedTime,
         )
-
-    def _ExtractNodes(
-        self,
-        Nodes: tuple[ExfatNode, ...],
-        Directory: Path,
-        State: list[int],
-        Total: int,
-        Progress: ProgressCallback | None,
-    ) -> None:
-        UsedNames: set[str] = set()
-        for Node in Nodes:
-            Name = _UniqueName(Node.Entry.Name, UsedNames)
-            Destination = Directory / Name
-            if Node.Entry.IsDirectory:
-                Destination.mkdir()
-                self._ExtractNodes(
-                    Node.Children,
-                    Destination,
-                    State,
-                    Total,
-                    Progress,
-                )
-                self._SetTimes(Destination, Node.Entry)
-            else:
-                self._WriteFile(
-                    Node.Entry,
-                    Destination,
-                    State,
-                    Total,
-                    Progress,
-                )
 
     def Extract(
         self,
-        OutputDirectory: str | os.PathLike[str],
+        OutputDirectory: PathType,
         *,
         Overwrite: bool = False,
         Progress: ProgressCallback | None = None,
     ) -> Path:
-        OutputPath = Path(OutputDirectory).resolve()
-        if OutputPath.parent == OutputPath:
-            raise ValueError("cannot extract to a filesystem root")
-        if OutputPath.exists() and not Overwrite:
-            raise FileExistsError(f"output already exists: {OutputPath}")
-        OutputPath.parent.mkdir(parents=True, exist_ok=True)
-        Nodes = self.BuildTree()
-        Total = sum(
-            Node.Entry.DataLength
-            for Node in self._Flatten(Nodes)
-            if not Node.Entry.IsDirectory
+        return ExtractTree(
+            OutputDirectory,
+            self.BuildTree(),
+            WriteFile=self._WriteFile,
+            SetTimes=self._SetTimes,
+            Overwrite=Overwrite,
+            Progress=Progress,
         )
-        TemporaryPath = Path(
-            tempfile.mkdtemp(
-                dir=OutputPath.parent,
-                prefix=f".{OutputPath.name}.",
-            )
-        )
-        BackupPath: Path | None = None
-        try:
-            self._ExtractNodes(Nodes, TemporaryPath, [0], Total, Progress)
-            if OutputPath.exists():
-                BackupPath = OutputPath.with_name(
-                    f".{OutputPath.name}.{uuid.uuid4().hex}.backup"
-                )
-                os.replace(OutputPath, BackupPath)
-            try:
-                os.replace(TemporaryPath, OutputPath)
-            except BaseException:
-                if BackupPath is not None and BackupPath.exists():
-                    os.replace(BackupPath, OutputPath)
-                raise
-            if BackupPath is not None:
-                _RemovePath(BackupPath)
-        except BaseException:
-            _RemovePath(TemporaryPath)
-            raise
-        return OutputPath
 
-    def _Flatten(self, Nodes: tuple[ExfatNode, ...]):
-        for Node in Nodes:
-            yield Node
-            yield from self._Flatten(Node.Children)

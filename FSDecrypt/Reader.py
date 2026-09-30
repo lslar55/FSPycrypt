@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import io
-import os
 from pathlib import Path
 from typing import BinaryIO, cast
 
@@ -22,9 +21,7 @@ from .Keys import (
     ReadKeyFile,
 )
 from .Model import BootIdSize, BootId, ContainerType
-
-
-PathType = str | os.PathLike[str]
+from .Util import PathType
 
 
 def _ReadBootId(Stream: BinaryIO) -> BootId:

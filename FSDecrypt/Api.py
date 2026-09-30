@@ -3,16 +3,14 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import tempfile
-from typing import BinaryIO, Callable, cast
+from typing import BinaryIO, cast
 
 from .Exfat import ExfatVolume
 from .Model import ContainerType
 from .Ntfs import NtfsVolume
-from .Reader import FSDecryptReader, PathType
+from .Reader import FSDecryptReader
+from .Util import PathType, ProgressCallback
 from .Vhd import OpenVhdNtfs
-
-
-ProgressCallback = Callable[[int, int], None]
 
 
 def DecryptFile(

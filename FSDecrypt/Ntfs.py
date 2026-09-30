@@ -1,20 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import os
 from pathlib import Path
-import tempfile
-from typing import Any, BinaryIO, Callable
-import uuid
+from typing import Any, BinaryIO
 
 from dissect.ntfs import NTFS
 from dissect.ntfs.c_ntfs import ATTRIBUTE_TYPE_CODE
 
 from .Errors import InvalidNtfsError
-from .Exfat import _RemovePath, _UniqueName
-
-
-ProgressCallback = Callable[[int, int], None]
+from .Extract import ExtractTree
+from .Util import PathType, ProgressCallback, SetFileTimes
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,20 +149,7 @@ class NtfsVolume:
         )
 
     def _SetTimes(self, Destination: Path, Node: NtfsNode) -> None:
-        if Node.ModifiedTime is None and Node.AccessedTime is None:
-            return
-        Current = Destination.stat()
-        os.utime(
-            Destination,
-            (
-                Node.AccessedTime
-                if Node.AccessedTime is not None
-                else Current.st_atime,
-                Node.ModifiedTime
-                if Node.ModifiedTime is not None
-                else Current.st_mtime,
-            ),
-        )
+        SetFileTimes(Destination, Node.AccessedTime, Node.ModifiedTime)
 
     def _WriteFile(
         self,
@@ -193,84 +175,19 @@ class NtfsVolume:
             ) from Error
         self._SetTimes(Destination, Node)
 
-    def _ExtractNodes(
-        self,
-        Nodes: tuple[NtfsNode, ...],
-        Directory: Path,
-        State: list[int],
-        Total: int,
-        Progress: ProgressCallback | None,
-    ) -> None:
-        UsedNames: set[str] = set()
-        for Node in Nodes:
-            Name = _UniqueName(Node.Name, UsedNames)
-            Destination = Directory / Name
-            if Node.IsDirectory:
-                Destination.mkdir()
-                self._ExtractNodes(
-                    Node.Children,
-                    Destination,
-                    State,
-                    Total,
-                    Progress,
-                )
-                self._SetTimes(Destination, Node)
-            else:
-                self._WriteFile(
-                    Node,
-                    Destination,
-                    State,
-                    Total,
-                    Progress,
-                )
-
     def Extract(
         self,
-        OutputDirectory: str | os.PathLike[str],
+        OutputDirectory: PathType,
         *,
         Overwrite: bool = False,
         Progress: ProgressCallback | None = None,
     ) -> Path:
-        OutputPath = Path(OutputDirectory).resolve()
-        if OutputPath.parent == OutputPath:
-            raise ValueError("cannot extract to a filesystem root")
-        if OutputPath.exists() and not Overwrite:
-            raise FileExistsError(f"output already exists: {OutputPath}")
-        OutputPath.parent.mkdir(parents=True, exist_ok=True)
-        Nodes = self.BuildTree()
-        Total = sum(
-            Node.Size
-            for Node in self._Flatten(Nodes)
-            if not Node.IsDirectory
+        return ExtractTree(
+            OutputDirectory,
+            self.BuildTree(),
+            WriteFile=self._WriteFile,
+            SetTimes=self._SetTimes,
+            Overwrite=Overwrite,
+            Progress=Progress,
         )
-        TemporaryPath = Path(
-            tempfile.mkdtemp(
-                dir=OutputPath.parent,
-                prefix=f".{OutputPath.name}.",
-            )
-        )
-        BackupPath: Path | None = None
-        try:
-            self._ExtractNodes(Nodes, TemporaryPath, [0], Total, Progress)
-            if OutputPath.exists():
-                BackupPath = OutputPath.with_name(
-                    f".{OutputPath.name}.{uuid.uuid4().hex}.backup"
-                )
-                os.replace(OutputPath, BackupPath)
-            try:
-                os.replace(TemporaryPath, OutputPath)
-            except BaseException:
-                if BackupPath is not None and BackupPath.exists():
-                    os.replace(BackupPath, OutputPath)
-                raise
-            if BackupPath is not None:
-                _RemovePath(BackupPath)
-        except BaseException:
-            _RemovePath(TemporaryPath)
-            raise
-        return OutputPath
 
-    def _Flatten(self, Nodes: tuple[NtfsNode, ...]):
-        for Node in Nodes:
-            yield Node
-            yield from self._Flatten(Node.Children)
