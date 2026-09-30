@@ -10,6 +10,10 @@ class MissingKeyError(FSDecryptError):
     pass
 
 
+class MissingBaseError(FSDecryptError):
+    pass
+
+
 class InvalidKeyFileError(FSDecryptError):
     pass
 

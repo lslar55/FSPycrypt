@@ -11,7 +11,6 @@ requires-python = ">=3.10"
 license = "0BSD"
 authors = [{ name = "beerpsi and contributors" }]
 dependencies = [
-    "dissect.hypervisor>=3.21,<4",
     "dissect.ntfs>=3.16,<4",
     "pycryptodome>=3.20",
 ]
