@@ -19,8 +19,7 @@ from .Model import BootId, ContainerType, Timestamp, Version
 from .Ntfs import NtfsNode, NtfsVolume
 from .Reader import FSDecryptReader, InspectContainer, OpenContainer
 from .Vhd import OpenChainedVhdNtfs, OpenVhdNtfs
-
-__version__ = "0.3.0"
+from ._version import __version__ as __version__
 
 __all__ = [
     "BootId",

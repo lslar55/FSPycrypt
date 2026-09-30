@@ -209,6 +209,7 @@ FSDecrypt/
   Extract.py   共用的提取引擎（原子替换、重名处理、递归）
   Util.py      路径、命名、时间戳等公共工具
   Errors.py    异常类型
+  _version.py  版本号单一来源
 tests/         纯逻辑回归测试（合成数据，不含任何厂商容器）
 ```
 

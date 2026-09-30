@@ -9,8 +9,10 @@
 - **不要重新引入命令行入口**：不添加 `argparse`/`click`/`loguru`，不添加
   `[project.scripts]`，不添加 `__main__.py`、`Cli.py` 或类似脚本。历史上的
   `Decrypt.py`、`fsdecrypt.py`、`FSDecrypt/Cli.py` 已被有意删除。
-- 版本号只有一个来源：`FSDecrypt/__init__.py` 的 `__version__`，`pyproject.toml`
-  通过 `dynamic = ["version"]` 读取它。不要在 `pyproject.toml` 里再写死版本。
+- 版本号只有一个来源：`FSDecrypt/_version.py` 的 `__version__`（刻意保持零 import，
+  以便 setuptools 在建包时静态读取），`pyproject.toml` 通过 `dynamic = ["version"]`
+  指向它，`FSDecrypt/__init__.py` 只做 re-export。不要在 `pyproject.toml` 或
+  `__init__.py` 里再写死版本。
 - 破坏公开 API 前先确认：`FSDecrypt/__init__.py` 的 `__all__` 就是公开契约。
 
 ## 2. 模块职责与依赖方向

@@ -19,7 +19,7 @@ dependencies = [
 Upstream = "https://gitea.tendokyu.moe/beerpsi/fsdecrypt"
 
 [tool.setuptools.dynamic]
-version = { attr = "FSDecrypt.__version__" }
+version = { attr = "FSDecrypt._version.__version__" }
 
 [tool.setuptools.packages.find]
 include = ["FSDecrypt*"]
