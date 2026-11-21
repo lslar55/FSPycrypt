@@ -19,10 +19,11 @@
 
 ```text
 Api.py      公开用例编排（ExtractFiles / ExtractNtfs / ExtractExfat / DecryptFile）
+Encrypt.py  反向打包（EncryptFile）：明文镜像 + 模板容器 → 加密容器
 Reader.py   fscrypt 容器读取器（按页解密 + seek）
 Crypto.py   AES-CBC 与页 IV 推导
 Model.py    BootID 解析
-Keys.py     内置密钥 + 外部密钥文件
+Keys.py     内置密钥、外部密钥文件与密钥解析（ResolveGameKeys）
 Vhd.py      VHD 格式：页脚 / 动态头 / BAT / 扇区位图 / 单盘与差分链
 Exfat.py    exFAT 解析与提取
 Ntfs.py     NTFS 树与提取（基于 dissect.ntfs）
@@ -30,7 +31,8 @@ Extract.py  共用提取引擎（原子替换、重名处理、递归）
 Util.py     路径、命名、时间戳等通用工具
 ```
 
-依赖方向必须单向：`Api → {Reader, Exfat, Ntfs, Vhd} → {Extract, Util, Model, Crypto, Errors}`。
+依赖方向必须单向：`Api → {Reader, Exfat, Ntfs, Vhd} → {Extract, Util, Model, Crypto, Errors}`，
+`Encrypt → {Keys, Model, Crypto, Util, Errors}`。
 
 - `Exfat.py` 与 `Ntfs.py` **不得**互相 import。两者共用的东西放 `Util.py` 或 `Extract.py`。
   历史上 `Ntfs.py` 反向 import `Exfat._UniqueName` / `Exfat._RemovePath`，已修正，别改回去。
@@ -80,7 +82,25 @@ def ExtractTree(OutputDirectory: PathType, Nodes: Sequence[ExtractNode], ...) ->
   `Children`）即可，新增文件系统请照此实现。
 - 提取过程中任何失败都必须让临时目录被清理，且**不得**破坏已存在的旧输出。
 
-## 6. 测试与验证
+## 6. 容器格式与加密约定
+
+以下事实已用真实容器逐字节验证过，改 `Reader.py` / `Encrypt.py` 前必须保持：
+
+- 容器布局：`[0:Length)` = BootID（AES-CBC，`BootIdKey` / `BootIdIv`）；
+  `[Length:DataOffset)` = 不透明头部，打包时从模板逐字节复制；
+  `[DataOffset:end)` = 明文镜像的加密数据区。
+- `Length` 实测为 10240，但它是 BootID 明文里的字段，不要写死成常量假设。
+- BootID 明文的 CRC32 在偏移 0，等于 `zlib.crc32(明文[4:Length])`，不含前 4 字节自身。
+- 数据区按 4096 字节分页，每页独立 AES-CBC，页 IV =
+  `CalculatePageIv(页在明文中的偏移, FileIv)`，页与页之间**不**串联。
+- `FileIv` 来自密钥表；没有配置 IV 时读取端从首 16 字节明文推导，因此**明文镜像的
+  前 16 字节必须等于 exFAT/NTFS 引导签名**，否则打包会破坏镜像开头。
+- 明文长度不单独存储，由 `BlockCount * BlockSize` 推导，所以打包必须把镜像零填充到
+  块大小的整数倍，并重算 `BlockCount`。
+- 不透明头部（约 2 MB）的内容未知，打包只能复制模板，**不要**试图自行生成。
+- 改动上述任何一条之前，先做「原镜像打包 == 原容器」的逐字节校验。
+
+## 7. 测试与验证
 
 本仓库**不提交测试套件**，`tests/` 曾被有意删除，不要重新引入测试目录、测试框架
 或 `pytest` / `unittest` 依赖。
@@ -99,8 +119,10 @@ python -m ruff check FSDecrypt
   验证完删掉，不要 `git add` 进来。
 - 改 `Vhd.py` 时，重点验证差分链：父子 GUID 匹配、多层优先级、部分扇区位图的跨扇区
   读、跨块连续读、虚拟容量截断。
+- 改 `Encrypt.py` 时，最低验证标准是「用原镜像打包得到与原容器逐字节相同的文件」，
+  并再覆盖：改动内容后回读一致、尺寸非块整数倍时的填充、派生 IV（只给 Key）路径。
 
-## 7. Git 约定
+## 8. Git 约定
 
 - 提交信息用中文，类型前缀沿用现状：`chore:` / `refactor:` / `feat:` / `fix:` / `docs:`。
 - 一次提交只做一件事，保持原子性；重构与功能改动不要混在同一个提交里。
@@ -109,7 +131,7 @@ python -m ruff check FSDecrypt
 - 不要把 `__pycache__/`、构建产物、临时验证目录加入版本控制；临时目录写进
   `.git/info/exclude`，不要污染 `.gitignore`。
 
-## 8. 与上游 Rust 版对齐
+## 9. 与上游 Rust 版对齐
 
 - 上游仓库：`https://gitea.tendokyu.moe/beerpsi/fsdecrypt`，主分支名为 `trunk`。
 - 取上游源码用 raw 接口，例如：
@@ -137,7 +159,7 @@ python -m ruff check FSDecrypt
   76 source_version / 80 os_version`。`option_id` 与 `target_version` 是同一段字节的
   两种解释（上游用 union）。
 
-## 9. 完成定义（DoD）
+## 10. 完成定义（DoD）
 
 一个改动算完成，需要同时满足：
 

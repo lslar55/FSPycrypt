@@ -4,6 +4,7 @@ from .Api import (
     ExtractFiles,
     ExtractNtfs,
 )
+from .Encrypt import EncryptFile
 from .Errors import (
     FSDecryptError,
     InvalidContainerError,
@@ -25,6 +26,7 @@ __all__ = [
     "BootId",
     "ContainerType",
     "DecryptFile",
+    "EncryptFile",
     "ExfatEntry",
     "ExfatNode",
     "ExfatVolume",

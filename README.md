@@ -18,6 +18,7 @@ FSDecrypt 是 [beerpsi/fsdecrypt](https://gitea.tendokyu.moe/beerpsi/fsdecrypt) 
 - APP / OS 容器：解密 → 外层 NTFS → `internal_<n>.vhd` → 内层 NTFS，内层 VHD 全程流式读取，同样不落地
 - **差分更新**：内层 VHD 是差分盘时，自动按 VHD GUID 向上寻找基础容器，并把多层差分合并成一条链后提取
 - 内置游戏密钥库，也支持外部 `{GAME_ID}.bin` 密钥文件
+- **可反向打包**：把明文 `.ntfs` / `.exfat` 镜像重新加密回 `.pack` / `.app` / `.opt` 容器
 - 提取先写入同卷临时目录，成功后原子替换，失败不会留下半成品
 - 保留 exFAT / NTFS 的修改时间与访问时间
 
@@ -72,6 +73,42 @@ OutputDirectory = ExtractFiles(
 多层补丁会沿着「差分盘的 Parent Unique ID = 父盘 Unique ID」逐级向上找全。找不到
 基础盘时抛出 `MissingBaseError`。
 
+## 重新打包（加密）
+
+`EncryptFile` 是 `DecryptFile` 的逆操作：把明文 `.ntfs` / `.exfat` 镜像重新加密回容器。
+
+```python
+from FSDecrypt import DecryptFile, EncryptFile
+
+Image = DecryptFile("O:/GAME.pack")          # 容器 → 明文镜像
+# ... 在这里修改镜像（例如用 NTFS/exFAT 写入工具替换文件）...
+Container = EncryptFile(
+    Image,
+    "O:/GAME.repacked.pack",
+    Template="O:/GAME.pack",                 # 必须提供
+)
+```
+
+**为什么需要 `Template`**：容器的头部并不只有 96 字节的 BootID。实测结构是
+「10240 字节 BootID（AES-CBC 加密）+ 约 2 MB 不透明头部 + 数据区」。不透明头部以及
+BootID 里几个未知字段无法从零构造，所以打包时从同游戏、同类型的原容器逐字节沿用，
+只重算 `BlockCount` 与 BootID 的 CRC32。
+
+**约束**：
+
+- 镜像必须以该类型应有的引导头开始（exFAT 或 NTFS 的 16 字节签名）。读取端要靠它
+  推导文件 IV，不匹配会直接报 `InvalidContainerError`。
+- 镜像会被零填充到 262144 字节（256 KiB）的整数倍，因为容器的明文长度由
+  `BlockCount` 推导，不单独存储。
+- `Template` 的容器类型必须与镜像一致：`.opt` 用 exFAT，`.pack` / `.app` 用 NTFS。
+- 每次只能打包「容器直接对应的那一层明文」。`.pack` 的明文是外层 NTFS（里面有
+  `internal_<n>.vhd`）；要改最内层文件，需要自己在 NTFS 层重建内层 VHD 与外层
+  NTFS，本库不代劳。
+
+**能验证什么、不能验证什么**：本库能证明「打包结果能被自己完整解回原镜像」，也能
+证明「拿原镜像打包会得到与原容器逐字节相同的文件」。但实机/游戏端是否接受修改过内容
+的容器，取决于厂商是否还有额外校验，本库无法验证。
+
 ## Python API
 
 ### 只生成解密镜像
@@ -84,6 +121,22 @@ print(ImagePath)
 ```
 
 输出文件名根据容器 BootID 自动生成，扩展名为 `.ntfs` 或 `.exfat`。
+
+### 重新加密镜像
+
+```python
+from FSDecrypt import EncryptFile
+
+ContainerPath = EncryptFile(
+    "O:/GAME.ntfs",
+    "O:/GAME.pack",
+    Template="O:/GAME_original.pack",
+    Overwrite=True,
+)
+```
+
+省略 `Output` 时按容器类型自动命名（`.opt` / `.app` / `.pack`）。也支持
+`Key` / `Iv` / `KeyDirectory` / `Progress` 参数，含义与解密侧一致。
 
 ### 查看容器信息
 
@@ -199,10 +252,11 @@ ExtractFiles("O:/GAME.pack", KeyDirectory="O:/Keys")
 ```text
 FSDecrypt/
   Api.py       公开 API：ExtractFiles / ExtractNtfs / ExtractExfat / DecryptFile
+  Encrypt.py   反向打包：明文镜像 + 模板容器 → 加密容器
   Reader.py    fscrypt 容器读取器，按页解密并暴露为可 seek 的流
   Crypto.py    AES-CBC 解密、页 IV 推导
   Model.py     BootID 解析与字段模型
-  Keys.py      内置密钥与外部密钥文件
+  Keys.py      内置密钥、外部密钥文件与密钥解析
   Vhd.py       VHD 页脚/动态头/BAT/位图解析，单盘与差分链读取
   Exfat.py     exFAT 文件系统解析与提取
   Ntfs.py      NTFS 文件系统树与提取（基于 dissect.ntfs）

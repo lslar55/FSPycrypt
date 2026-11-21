@@ -2,8 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING, Sequence
 
-from .Errors import InvalidKeyFileError
+from .Errors import InvalidKeyFileError, MissingKeyError
+from .Model import ContainerType
+from .Util import PathType
+
+if TYPE_CHECKING:
+    from .Model import BootId
 
 
 NtfsHeader = bytes.fromhex("eb52904e544653202020200010010000")
@@ -115,3 +121,58 @@ def ReadKeyFile(PathValue: str | Path) -> GameKeys:
     if Iv in (NtfsHeader, ExfatHeader):
         Iv = None
     return GameKeys(Data[:16], Iv)
+
+
+AesBlockSize = 16
+
+
+def ResolveGameKeys(
+    BootId: "BootId",
+    *,
+    Key: bytes | None = None,
+    Iv: bytes | None = None,
+    KeyDirectory: PathType | None = None,
+    SearchPaths: Sequence[Path] = (),
+) -> GameKeys:
+    """Pick the AES key/IV for a container, mirroring how it is read.
+
+    ``Key`` wins over everything; otherwise built-in keys are preferred and an
+    external ``{GAME_ID}.bin`` next to the container, in ``KeyDirectory`` or in
+    the working directory is used as a fallback.
+    """
+
+    if Iv is not None and len(Iv) != AesBlockSize:
+        raise ValueError("IV must be 16 bytes")
+    if Key is not None:
+        if len(Key) != AesBlockSize:
+            raise ValueError("key must be 16 bytes")
+        return GameKeys(Key, Iv)
+
+    if BootId.ContainerType is ContainerType.Option:
+        return GameKeys(OptionKey, Iv if Iv is not None else OptionIv)
+
+    KeyId = (
+        BootId.OsId
+        if BootId.ContainerType is ContainerType.Os
+        else BootId.GameId
+    )
+    if KeyId in BuiltinKeys:
+        Resolved = BuiltinKeys[KeyId]
+        return GameKeys(Resolved.Key, Iv if Iv is not None else Resolved.Iv)
+
+    Directories: list[Path] = []
+    if KeyDirectory is not None:
+        Directories.append(Path(KeyDirectory))
+    Directories.extend(Path(Item) for Item in SearchPaths)
+    Directories.append(Path.cwd())
+    for Directory in dict.fromkeys(Item.resolve() for Item in Directories):
+        Candidate = Directory / f"{KeyId}.bin"
+        if Candidate.is_file():
+            Resolved = ReadKeyFile(Candidate)
+            return GameKeys(
+                Resolved.Key,
+                Iv if Iv is not None else Resolved.Iv,
+            )
+    raise MissingKeyError(
+        f"no key for {KeyId!r}; provide Key, KeyDirectory, or {KeyId}.bin"
+    )

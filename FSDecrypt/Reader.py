@@ -8,17 +8,14 @@ from Crypto.Cipher import AES
 from Crypto.Util.strxor import strxor
 
 from .Crypto import PageSize, CalculateFileIv, CalculatePageIv, DecryptCbc
-from .Errors import InvalidContainerError, MissingKeyError
+from .Errors import InvalidContainerError
 from .Keys import (
     BootIdIv,
     BootIdKey,
-    BuiltinKeys,
     ExfatHeader,
     NtfsHeader,
-    OptionIv,
-    OptionKey,
     GameKeys,
-    ReadKeyFile,
+    ResolveGameKeys,
 )
 from .Model import BootIdSize, BootId, ContainerType
 from .Util import PathType
@@ -92,41 +89,13 @@ class FSDecryptReader(io.BufferedIOBase):
         Iv: bytes | None,
         KeyDirectory: PathType | None,
     ) -> GameKeys:
-        if Iv is not None and len(Iv) != 16:
-            raise ValueError("IV must be 16 bytes")
-        if Key is not None:
-            if len(Key) != 16:
-                raise ValueError("key must be 16 bytes")
-            return GameKeys(Key, Iv)
-
-        if self.BootId.ContainerType is ContainerType.Option:
-            return GameKeys(OptionKey, Iv if Iv is not None else OptionIv)
-
-        KeyId = (
-            self.BootId.OsId
-            if self.BootId.ContainerType is ContainerType.Os
-            else self.BootId.GameId
-        )
-        if KeyId in BuiltinKeys:
-            Resolved = BuiltinKeys[KeyId]
-            return GameKeys(Resolved.Key, Iv if Iv is not None else Resolved.Iv)
-
-        Directories: list[Path] = []
-        if KeyDirectory is not None:
-            Directories.append(Path(KeyDirectory))
-        if self._Path is not None:
-            Directories.append(self._Path.parent)
-        Directories.append(Path.cwd())
-        for Directory in dict.fromkeys(Item.resolve() for Item in Directories):
-            Candidate = Directory / f"{KeyId}.bin"
-            if Candidate.is_file():
-                Resolved = ReadKeyFile(Candidate)
-                return GameKeys(
-                    Resolved.Key,
-                    Iv if Iv is not None else Resolved.Iv,
-                )
-        raise MissingKeyError(
-            f"no key for {KeyId!r}; provide Key, KeyDirectory, or {KeyId}.bin"
+        SearchPaths = (self._Path.parent,) if self._Path is not None else ()
+        return ResolveGameKeys(
+            self.BootId,
+            Key=Key,
+            Iv=Iv,
+            KeyDirectory=KeyDirectory,
+            SearchPaths=SearchPaths,
         )
 
     def _ResolveIv(self, ConfiguredIv: bytes | None, ExplicitIv: bool) -> bytes:
