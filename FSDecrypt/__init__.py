@@ -15,12 +15,18 @@ from .Errors import (
     InvalidVhdError,
     MissingBaseError,
     MissingKeyError,
+    NtfsBuildError,
     UnsupportedContainerError,
 )
 from .Exfat import ExfatEntry, ExfatNode, ExfatVolume
 from .ExfatBuild import BuildExfatImage, ReadUpcaseTable
 from .Model import BootId, ContainerType, Timestamp, Version
 from .Ntfs import NtfsNode, NtfsVolume
+from .NtfsBuild import (
+    FindNtfsToolchain,
+    InstallNtfsTools,
+    NtfsToolchain,
+)
 from .Reader import FSDecryptReader, InspectContainer, OpenContainer
 from .Vhd import OpenChainedVhdNtfs, OpenVhdNtfs
 from ._version import __version__ as __version__
@@ -41,7 +47,9 @@ __all__ = [
     "ExtractNtfs",
     "FSDecryptError",
     "FSDecryptReader",
+    "FindNtfsToolchain",
     "InspectContainer",
+    "InstallNtfsTools",
     "InvalidContainerError",
     "InvalidExfatError",
     "InvalidKeyFileError",
@@ -49,7 +57,9 @@ __all__ = [
     "InvalidVhdError",
     "MissingBaseError",
     "MissingKeyError",
+    "NtfsBuildError",
     "NtfsNode",
+    "NtfsToolchain",
     "NtfsVolume",
     "OpenChainedVhdNtfs",
     "OpenContainer",

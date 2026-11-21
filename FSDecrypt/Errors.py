@@ -32,3 +32,7 @@ class InvalidVhdError(FSDecryptError):
 
 class UnsupportedContainerError(FSDecryptError):
     pass
+
+
+class NtfsBuildError(FSDecryptError):
+    pass

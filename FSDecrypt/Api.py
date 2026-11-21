@@ -7,11 +7,12 @@ import tempfile
 from typing import BinaryIO, cast
 
 from .Encrypt import ContainerExtension, EncryptFile
-from .Errors import FSDecryptError, MissingBaseError, UnsupportedContainerError
+from .Errors import FSDecryptError, MissingBaseError
 from .Exfat import ExfatVolume
 from .ExfatBuild import BuildExfatImage, ReadUpcaseTable
-from .Model import ContainerType
+from .Model import BootId, ContainerType
 from .Ntfs import NtfsVolume
+from .NtfsBuild import BuildAppImage, NtfsToolchain
 from .Reader import FSDecryptReader
 from .Util import PathType, ProgressCallback
 from .Vhd import (
@@ -480,20 +481,23 @@ def PackFolder(
     Output: PathType | None = None,
     *,
     Template: PathType | None = None,
+    Toolchain: NtfsToolchain | None = None,
     Overwrite: bool = False,
     ChunkSize: int = 16 * 1024 * 1024,
     Progress: ProgressCallback | None = None,
 ) -> Path:
     """Build a container out of a directory tree.
 
-    Only OPTION (``.opt``) containers are supported: their payload is a plain
-    exFAT image, which this library can author. APP/OS containers wrap an NTFS
-    image that itself holds an ``internal_<n>.vhd``; authoring that would need a
-    full NTFS formatter, so it is rejected with ``UnsupportedContainerError``.
+    OPTION (``.opt``) containers carry a plain exFAT image, which this library
+    authors itself. APP/OS (``.pack`` / ``.app``) containers carry an NTFS image
+    with an ``internal_<n>.vhd`` inside; those are built through the Linux
+    ntfs-3g toolchain running under WSL (see :func:`FSDecrypt.InstallNtfsTools`),
+    so no Windows administrator rights are needed.
 
     ``Template`` must be an existing container of the same kind: its BootID
-    fields and opaque header are reused by :func:`EncryptFile`. ``Progress``
-    reports the image-authoring phase, which is the slow one.
+    fields and opaque header are reused by :func:`EncryptFile`.  ``Progress``
+    reports bytes while authoring the payload; for APP/OS containers it fires at
+    phase boundaries only.
     """
 
     if Template is None:
@@ -510,12 +514,11 @@ def PackFolder(
 
     with FSDecryptReader(TemplatePath) as Reader:
         BootId = Reader.BootId
-        if BootId.ContainerType is not ContainerType.Option:
-            raise UnsupportedContainerError(
-                "folder packing supports OPTION (.opt) containers only; "
-                f"{TemplatePath.name} is {BootId.ContainerType.name}"
-            )
-        UpcaseTable = ReadUpcaseTable(Reader)
+        UpcaseTable = (
+            ReadUpcaseTable(Reader)
+            if BootId.ContainerType is ContainerType.Option
+            else None
+        )
 
     OutputPath = (
         Path(Output)
@@ -526,6 +529,36 @@ def PackFolder(
         raise FileExistsError(f"output already exists: {OutputPath}")
     OutputPath.parent.mkdir(parents=True, exist_ok=True)
 
+    if BootId.ContainerType is ContainerType.Option:
+        return _PackOptionFolder(
+            SourcePath,
+            OutputPath,
+            TemplatePath,
+            BootId,
+            UpcaseTable,
+            ChunkSize,
+            Progress,
+        )
+    return _PackAppFolder(
+        SourcePath,
+        OutputPath,
+        TemplatePath,
+        BootId,
+        Toolchain,
+        ChunkSize,
+        Progress,
+    )
+
+
+def _PackOptionFolder(
+    SourcePath: Path,
+    OutputPath: Path,
+    TemplatePath: Path,
+    BootId: BootId,
+    UpcaseTable: bytes | None,
+    ChunkSize: int,
+    Progress: ProgressCallback | None,
+) -> Path:
     TemporaryPath: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -542,6 +575,47 @@ def PackFolder(
             UpcaseTable=UpcaseTable,
             VolumeSize=BootId.PlaintextSize,
             Overwrite=True,
+            Progress=Progress,
+        )
+        return EncryptFile(
+            TemporaryPath,
+            OutputPath,
+            Template=TemplatePath,
+            Overwrite=True,
+            ChunkSize=ChunkSize,
+        )
+    finally:
+        if TemporaryPath is not None:
+            try:
+                TemporaryPath.unlink()
+            except FileNotFoundError:
+                pass
+
+
+def _PackAppFolder(
+    SourcePath: Path,
+    OutputPath: Path,
+    TemplatePath: Path,
+    BootId: BootId,
+    Toolchain: NtfsToolchain | None,
+    ChunkSize: int,
+    Progress: ProgressCallback | None,
+) -> Path:
+    TemporaryPath: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=OutputPath.parent,
+            prefix=f".{OutputPath.name}.",
+            suffix=".ntfs",
+            delete=False,
+        ) as Handle:
+            TemporaryPath = Path(Handle.name)
+        BuildAppImage(
+            SourcePath,
+            TemporaryPath,
+            SequenceNumber=BootId.SequenceNumber,
+            Toolchain=Toolchain,
             Progress=Progress,
         )
         return EncryptFile(

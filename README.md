@@ -19,7 +19,7 @@ FSDecrypt 是 [beerpsi/fsdecrypt](https://gitea.tendokyu.moe/beerpsi/fsdecrypt) 
 - **差分更新**：内层 VHD 是差分盘时，自动按 VHD GUID 向上寻找基础容器，并把多层差分合并成一条链后提取
 - 内置游戏密钥库，也支持外部 `{GAME_ID}.bin` 密钥文件
 - **可反向打包**：把明文 `.ntfs` / `.exfat` 镜像重新加密回 `.pack` / `.app` / `.opt` 容器
-- **可从文件夹打包**：直接用一个文件夹生成 `.opt` 容器（本库自建 exFAT 镜像）
+- **可从文件夹打包**：`.opt` 由本库自建 exFAT，`.pack` / `.app` 经 WSL 的 ntfs-3g 构建
 - 提取先写入同卷临时目录，成功后原子替换，失败不会留下半成品
 - 保留 exFAT / NTFS 的修改时间与访问时间
 
@@ -110,9 +110,9 @@ BootID 里几个未知字段无法从零构造，所以打包时从同游戏、�
 证明「拿原镜像打包会得到与原容器逐字节相同的文件」。但实机/游戏端是否接受修改过内容
 的容器，取决于厂商是否还有额外校验，本库无法验证。
 
-## 从文件夹打包（.opt）
+## 从文件夹打包
 
-不想自己处理镜像时，`PackFolder` 可以直接把一个文件夹变成 `.opt` 容器：
+`PackFolder` 可以直接把文件夹变成容器，`.opt` 与 `.pack` / `.app` 都支持：
 
 ```python
 from FSDecrypt import PackFolder
@@ -124,20 +124,43 @@ Container = PackFolder(
 )
 ```
 
-本库自己写 exFAT，流程是「文件夹 → exFAT 镜像 → 用 `EncryptFile` 加密成 `.opt`」，
-中间镜像写在目标目录旁边并在结束后删除。几个细节：
+本库自己写 exFAT（`.opt` 走这条路，不需要任何外部工具），流程是「文件夹 → exFAT 镜像
+→ 用 `EncryptFile` 加密成 `.opt`」，中间镜像写在目标目录旁边并在结束后删除。细节：
 
 - 生成的 exFAT 采用与真实镜像一致的布局：4096 字节扇区、4 KiB 簇、24 个引导扇区、
   分配位图/upcase 表/根目录依次排布，目录项校验和与名字哈希都按规范计算。
 - upcase 表直接取自 `Template` 容器自带的 exFAT 镜像，不内嵌任何厂商数据。
 - 镜像总大小默认对齐到 `Template` 的明文大小，因此打包结果与原容器**同尺寸**；文件夹
   超过模板容量时会自动增大 `BlockCount`。
-- `Progress` 回调报告的是「写镜像」阶段（文件内容复制），这是主要耗时部分。
+- `Progress` 回调报告的是「写镜像」阶段（文件内容复制），这是主要耗时部分；对
+  `.pack` / `.app` 只在阶段边界回调。
 
-**`.pack` / `.app` 不支持从文件夹打包**。它们明文是外层 NTFS，里面还套
-`internal_<n>.vhd`，从零构造需要完整的 NTFS 格式化器，本库不提供；传入这类模板会抛
-`UnsupportedContainerError`。这类容器请先用 `DecryptFile` 取出镜像、在用外部工具修改
-后交给 `EncryptFile`。
+**`.pack` / `.app`** 的明文是外层 NTFS，里面套 `internal_<n>.vhd`，再里面才是内层
+NTFS。本库不自带 NTFS 格式化器，而是把这一步交给 Linux 的 `ntfs-3g` 工具链（在 WSL 里
+跑，**不需要 Windows 管理员权限**）：
+
+```python
+from FSDecrypt import InstallNtfsTools, PackFolder
+
+InstallNtfsTools()      # 一次性：往 WSL 私有目录下载解包 ntfs-3g（约 1 MB）
+
+PackFolder("O:/Mod/Game", "O:/GAME.new.pack", Template="O:/GAME.pack")
+```
+
+流程是「文件夹 → 内层 NTFS（mkntfs + 挂载写入）→ 固定 VHD（MBR 分区 @1 MiB + 页脚）
+→ 外层 NTFS（4096 字节扇区）→ `EncryptFile` 加密」。要求：
+
+- 装有 WSL 2 和 Debian/Ubuntu 发行版，且 `wsl -u root` 可直接进入（默认可以）。
+- `InstallNtfsTools()` 只下载并解包 `.deb` 到 `~/.fsdecrypt/ntfs-tools`，不安装系统包、
+  不需要 sudo 或 Windows 管理员；也可用 `FSDECRYPT_NTFS_TOOLS` 环境变量指向现成前缀。
+- 中间镜像会临时占用「内容约 3 倍」的空间，结束后自动删除。
+
+两条路径的可验证范围相同：本库能证明「打包结果被自己完整解回原文件夹」；此外 exFAT
+可用 `fsck.exfat`、NTFS 可用 `ntfsfix -n` / `ntfsls` 独立校验。**实机/游戏端是否接受
+修改过内容的容器无法验证**，取决于厂商是否还有额外签名校验。
+
+如果连 WSL 也不想用：先用 `DecryptFile` 取出明文镜像，用外部工具改完后交给
+`EncryptFile`，走纯镜像路径即可。
 
 ## Python API
 
@@ -315,6 +338,7 @@ FSDecrypt/
   Vhd.py       VHD 页脚/动态头/BAT/位图解析，单盘与差分链读取
   Exfat.py     exFAT 文件系统解析与提取
   ExfatBuild.py 从文件夹构建 exFAT 镜像（含 upcase 表读取）
+  NtfsBuild.py 经 WSL 的 ntfs-3g 构建 NTFS 镜像 / VHD / 外层镜像
   Ntfs.py      NTFS 文件系统树与提取（基于 dissect.ntfs）
   Extract.py   共用的提取引擎（原子替换、重名处理、递归）
   Util.py      路径、命名、时间戳等公共工具

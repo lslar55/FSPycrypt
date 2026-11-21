@@ -27,13 +27,15 @@ Keys.py     内置密钥、外部密钥文件与密钥解析（ResolveGameKeys�
 Vhd.py      VHD 格式：页脚 / 动态头 / BAT / 扇区位图 / 单盘与差分链
 Exfat.py    exFAT 解析与提取
 ExfatBuild.py 从文件夹构建 exFAT 镜像（BuildExfatImage / ReadUpcaseTable）
+NtfsBuild.py 经 WSL 的 ntfs-3g 构建 NTFS 镜像 / 固定 VHD / 外层镜像
 Ntfs.py     NTFS 树与提取（基于 dissect.ntfs）
 Extract.py  共用提取引擎（原子替换、重名处理、递归）
 Util.py     路径、命名、时间戳等通用工具
 ```
 
-依赖方向必须单向：`Api → {Reader, Exfat, ExfatBuild, Encrypt, Ntfs, Vhd} → {Extract, Util, Model, Crypto, Keys, Errors}`，
-`Encrypt → {Keys, Model, Crypto, Util, Errors}`，`ExfatBuild → {Util, Errors}`（不依赖 Reader）。
+依赖方向必须单向：`Api → {Reader, Exfat, ExfatBuild, NtfsBuild, Encrypt, Ntfs, Vhd} → {Extract, Util, Model, Crypto, Keys, Errors}`，
+`Encrypt → {Keys, Model, Crypto, Util, Errors}`，`ExfatBuild → {Util, Errors}`（不依赖 Reader），
+`NtfsBuild → {Util, Errors}`（不依赖 Reader，也不认识容器格式）。
 
 - `Exfat.py` 与 `Ntfs.py` **不得**互相 import。两者共用的东西放 `Util.py` 或 `Extract.py`。
   历史上 `Ntfs.py` 反向 import `Exfat._UniqueName` / `Exfat._RemovePath`，已修正，别改回去。
@@ -111,9 +113,27 @@ def ExtractTree(OutputDirectory: PathType, Nodes: Sequence[ExtractNode], ...) ->
   其校验和是**逐字节 32 位轮转**（不是 16 位）。
 - upcase 表优先从模板容器自带的 exFAT 镜像读取（`ReadUpcaseTable`），不要内嵌任何
   厂商镜像里抠出来的数据块。
-- **不要**实现 NTFS 构建器。`.pack`/`.app` 的明文是「外层 NTFS 套 `internal_<n>.vhd`
-  套内层 NTFS」，需要完整 NTFS 格式化器；本仓库没有、也不该在没有挂载验证手段的环境里
-  手写。`PackFolder` 对这类模板抛 `UnsupportedContainerError` 是**有意为之**。
+- **不要**自己手写 NTFS 格式化器（mkntfs 是几万行 C 的成熟实现，且本机没有挂载验证
+  手段时无法判断产物是否可挂载）。`.pack`/`.app` 的从零构造走 `NtfsBuild.py`：
+  把 `mkntfs` / `ntfs-3g` 委托给 WSL（`wsl -u root`，不需要 Windows 管理员），
+  NTFS 结构正确性由参考实现保证。
+
+### NTFS 构建器（`NtfsBuild.py`）
+
+- 工具链是 WSL 里私有前缀下的 `mkntfs`/`ntfs-3g`（`InstallNtfsTools()` 下载解包，
+  不装系统包、不动 Windows）。工具版本是**固定配对**，别改成"取最新"——曾经因为
+  `sort -V` 选中旧版 `libntfs-3g883` 导致 SONAME 不匹配。
+- 工具脚本通过 `wsl -u root bash <script> <action> ...` 调用；注意 WSL 会重新解析
+  命令行，**不要**把带空格的环境变量拼进内联命令，写成脚本文件传参。
+- 安装前缀是「默认 WSL 用户的 home」（`~/.fsdecrypt/ntfs-tools`），但挂载是以 root
+  执行的，所以前缀必须是**绝对路径**，`~` 在 root 下会指向 `/root`。
+- 外层 NTFS 必须用 `mkntfs -s 4096 -c 4096`：容器读取端要靠开头 16 字节（含 4096
+  字节扇区标志）推导文件 IV，512 字节扇区会导致 `InvalidContainerError`。
+- 内层 VHD 用**固定盘**（type 2）：MBR 分区从 1 MiB 开始、类型 0x07，页脚
+  `conectix` + CHS + 校验和；`internal_<n>.vhd` 的序号必须等于模板 BootID 的
+  `SequenceNumber`。
+- 这些约定改动后，验证必须是「文件夹 → PackFolder(.pack) → ExtractFiles → 与原文件夹
+  逐文件比对一致」。
 
 ## 7. 测试与验证
 
@@ -139,6 +159,9 @@ python -m ruff check FSDecrypt
 - 改 `ExfatBuild.py` 时，验证闭环是「文件夹 → `BuildExfatImage` → 用 `ExfatVolume`
   提取回来内容一致」，以及「文件夹 → `PackFolder` → `ExtractFiles` 一致」；两条都要
   覆盖：普通文件、空文件、多级目录、文件名接近 15 字符边界的情况。
+- 改 `NtfsBuild.py` 时，验证闭环是「文件夹 → `PackFolder(.pack)` → `ExtractFiles`
+  → 与原文件夹逐文件哈希一致」，并用 `ntfsfix -n` / `ntfsls` 独立校验中间镜像。
+  需要 WSL；Windows 管理员权限不是必需的，也不要要求用户开管理员。
 
 ## 8. Git 约定
 
