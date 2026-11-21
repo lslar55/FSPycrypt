@@ -6,8 +6,10 @@ from pathlib import Path
 import tempfile
 from typing import BinaryIO, cast
 
-from .Errors import FSDecryptError, MissingBaseError
+from .Encrypt import ContainerExtension, EncryptFile
+from .Errors import FSDecryptError, MissingBaseError, UnsupportedContainerError
 from .Exfat import ExfatVolume
+from .ExfatBuild import BuildExfatImage, ReadUpcaseTable
 from .Model import ContainerType
 from .Ntfs import NtfsVolume
 from .Reader import FSDecryptReader
@@ -471,3 +473,87 @@ def ExtractFiles(
             Overwrite=Overwrite,
             Progress=Progress,
         )
+
+
+def PackFolder(
+    Source: PathType,
+    Output: PathType | None = None,
+    *,
+    Template: PathType | None = None,
+    Overwrite: bool = False,
+    ChunkSize: int = 16 * 1024 * 1024,
+    Progress: ProgressCallback | None = None,
+) -> Path:
+    """Build a container out of a directory tree.
+
+    Only OPTION (``.opt``) containers are supported: their payload is a plain
+    exFAT image, which this library can author. APP/OS containers wrap an NTFS
+    image that itself holds an ``internal_<n>.vhd``; authoring that would need a
+    full NTFS formatter, so it is rejected with ``UnsupportedContainerError``.
+
+    ``Template`` must be an existing container of the same kind: its BootID
+    fields and opaque header are reused by :func:`EncryptFile`. ``Progress``
+    reports the image-authoring phase, which is the slow one.
+    """
+
+    if Template is None:
+        raise ValueError(
+            "Template is required: packing reuses the template's header fields"
+        )
+
+    SourcePath = Path(Source)
+    if not SourcePath.is_dir():
+        raise NotADirectoryError(f"not a directory: {SourcePath}")
+    TemplatePath = Path(Template)
+    if not TemplatePath.is_file():
+        raise FileNotFoundError(f"template not found: {TemplatePath}")
+
+    with FSDecryptReader(TemplatePath) as Reader:
+        BootId = Reader.BootId
+        if BootId.ContainerType is not ContainerType.Option:
+            raise UnsupportedContainerError(
+                "folder packing supports OPTION (.opt) containers only; "
+                f"{TemplatePath.name} is {BootId.ContainerType.name}"
+            )
+        UpcaseTable = ReadUpcaseTable(Reader)
+
+    OutputPath = (
+        Path(Output)
+        if Output is not None
+        else SourcePath.with_suffix(ContainerExtension(BootId.ContainerType))
+    )
+    if OutputPath.exists() and not Overwrite:
+        raise FileExistsError(f"output already exists: {OutputPath}")
+    OutputPath.parent.mkdir(parents=True, exist_ok=True)
+
+    TemporaryPath: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=OutputPath.parent,
+            prefix=f".{OutputPath.name}.",
+            suffix=".exfat",
+            delete=False,
+        ) as Handle:
+            TemporaryPath = Path(Handle.name)
+        BuildExfatImage(
+            SourcePath,
+            TemporaryPath,
+            UpcaseTable=UpcaseTable,
+            VolumeSize=BootId.PlaintextSize,
+            Overwrite=True,
+            Progress=Progress,
+        )
+        return EncryptFile(
+            TemporaryPath,
+            OutputPath,
+            Template=TemplatePath,
+            Overwrite=True,
+            ChunkSize=ChunkSize,
+        )
+    finally:
+        if TemporaryPath is not None:
+            try:
+                TemporaryPath.unlink()
+            except FileNotFoundError:
+                pass

@@ -19,6 +19,7 @@ FSDecrypt 是 [beerpsi/fsdecrypt](https://gitea.tendokyu.moe/beerpsi/fsdecrypt) 
 - **差分更新**：内层 VHD 是差分盘时，自动按 VHD GUID 向上寻找基础容器，并把多层差分合并成一条链后提取
 - 内置游戏密钥库，也支持外部 `{GAME_ID}.bin` 密钥文件
 - **可反向打包**：把明文 `.ntfs` / `.exfat` 镜像重新加密回 `.pack` / `.app` / `.opt` 容器
+- **可从文件夹打包**：直接用一个文件夹生成 `.opt` 容器（本库自建 exFAT 镜像）
 - 提取先写入同卷临时目录，成功后原子替换，失败不会留下半成品
 - 保留 exFAT / NTFS 的修改时间与访问时间
 
@@ -109,6 +110,35 @@ BootID 里几个未知字段无法从零构造，所以打包时从同游戏、�
 证明「拿原镜像打包会得到与原容器逐字节相同的文件」。但实机/游戏端是否接受修改过内容
 的容器，取决于厂商是否还有额外校验，本库无法验证。
 
+## 从文件夹打包（.opt）
+
+不想自己处理镜像时，`PackFolder` 可以直接把一个文件夹变成 `.opt` 容器：
+
+```python
+from FSDecrypt import PackFolder
+
+Container = PackFolder(
+    "O:/Mod/Option",                        # 文件夹
+    "O:/GAME.new.opt",
+    Template="O:/GAME.opt",                 # 原容器，必须提供
+)
+```
+
+本库自己写 exFAT，流程是「文件夹 → exFAT 镜像 → 用 `EncryptFile` 加密成 `.opt`」，
+中间镜像写在目标目录旁边并在结束后删除。几个细节：
+
+- 生成的 exFAT 采用与真实镜像一致的布局：4096 字节扇区、4 KiB 簇、24 个引导扇区、
+  分配位图/upcase 表/根目录依次排布，目录项校验和与名字哈希都按规范计算。
+- upcase 表直接取自 `Template` 容器自带的 exFAT 镜像，不内嵌任何厂商数据。
+- 镜像总大小默认对齐到 `Template` 的明文大小，因此打包结果与原容器**同尺寸**；文件夹
+  超过模板容量时会自动增大 `BlockCount`。
+- `Progress` 回调报告的是「写镜像」阶段（文件内容复制），这是主要耗时部分。
+
+**`.pack` / `.app` 不支持从文件夹打包**。它们明文是外层 NTFS，里面还套
+`internal_<n>.vhd`，从零构造需要完整的 NTFS 格式化器，本库不提供；传入这类模板会抛
+`UnsupportedContainerError`。这类容器请先用 `DecryptFile` 取出镜像、在用外部工具修改
+后交给 `EncryptFile`。
+
 ## Python API
 
 ### 只生成解密镜像
@@ -137,6 +167,31 @@ ContainerPath = EncryptFile(
 
 省略 `Output` 时按容器类型自动命名（`.opt` / `.app` / `.pack`）。也支持
 `Key` / `Iv` / `KeyDirectory` / `Progress` 参数，含义与解密侧一致。
+
+### 从文件夹打包容器
+
+```python
+from FSDecrypt import PackFolder
+
+ContainerPath = PackFolder(
+    "O:/Mod/Option",
+    "O:/GAME.new.opt",
+    Template="O:/GAME.opt",
+    Overwrite=True,
+)
+```
+
+只支持 `.opt`（exFAT 载荷），`.pack` / `.app` 会抛 `UnsupportedContainerError`。
+
+需要自己控制 exFAT 生成过程时，可以只用底层函数：
+
+```python
+from FSDecrypt import BuildExfatImage, ReadUpcaseTable
+
+with open("O:/GAME.opt", "rb") as Stream:      # 也可以用 OpenContainer(...)
+    Table = ReadUpcaseTable(Stream)
+ImagePath = BuildExfatImage("O:/Mod/Option", "O:/Mod.img", UpcaseTable=Table)
+```
 
 ### 查看容器信息
 
@@ -251,7 +306,7 @@ ExtractFiles("O:/GAME.pack", KeyDirectory="O:/Keys")
 
 ```text
 FSDecrypt/
-  Api.py       公开 API：ExtractFiles / ExtractNtfs / ExtractExfat / DecryptFile
+  Api.py       公开 API：ExtractFiles / ExtractNtfs / ExtractExfat / DecryptFile / PackFolder
   Encrypt.py   反向打包：明文镜像 + 模板容器 → 加密容器
   Reader.py    fscrypt 容器读取器，按页解密并暴露为可 seek 的流
   Crypto.py    AES-CBC 解密、页 IV 推导
@@ -259,6 +314,7 @@ FSDecrypt/
   Keys.py      内置密钥、外部密钥文件与密钥解析
   Vhd.py       VHD 页脚/动态头/BAT/位图解析，单盘与差分链读取
   Exfat.py     exFAT 文件系统解析与提取
+  ExfatBuild.py 从文件夹构建 exFAT 镜像（含 upcase 表读取）
   Ntfs.py      NTFS 文件系统树与提取（基于 dissect.ntfs）
   Extract.py   共用的提取引擎（原子替换、重名处理、递归）
   Util.py      路径、命名、时间戳等公共工具

@@ -66,6 +66,12 @@ def _ExpectedHeader(ContainerTypeValue: ContainerType) -> bytes:
     return _ExpectedHeaders.get(ContainerTypeValue, _DefaultExpectedHeader)
 
 
+def ContainerExtension(ContainerTypeValue: ContainerType) -> str:
+    """File extension a container of this type would carry."""
+
+    return _ContainerExtensions[ContainerTypeValue]
+
+
 def _DecryptBootId(Encrypted: bytes) -> bytes:
     if len(Encrypted) % AesBlockSize:
         raise InvalidContainerError("BootID length is not a multiple of 16")
@@ -262,7 +268,7 @@ def EncryptFile(
     OutputPath = (
         Path(Output)
         if Output is not None
-        else SourcePath.with_suffix(_ContainerExtensions[BootIdValue.ContainerType])
+        else SourcePath.with_suffix(ContainerExtension(BootIdValue.ContainerType))
     )
     if OutputPath.exists() and not Overwrite:
         raise FileExistsError(f"output already exists: {OutputPath}")

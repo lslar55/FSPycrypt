@@ -18,7 +18,7 @@
 ## 2. 模块职责与依赖方向
 
 ```text
-Api.py      公开用例编排（ExtractFiles / ExtractNtfs / ExtractExfat / DecryptFile）
+Api.py      公开用例编排（ExtractFiles / ExtractNtfs / ExtractExfat / DecryptFile / PackFolder）
 Encrypt.py  反向打包（EncryptFile）：明文镜像 + 模板容器 → 加密容器
 Reader.py   fscrypt 容器读取器（按页解密 + seek）
 Crypto.py   AES-CBC 与页 IV 推导
@@ -26,13 +26,14 @@ Model.py    BootID 解析
 Keys.py     内置密钥、外部密钥文件与密钥解析（ResolveGameKeys）
 Vhd.py      VHD 格式：页脚 / 动态头 / BAT / 扇区位图 / 单盘与差分链
 Exfat.py    exFAT 解析与提取
+ExfatBuild.py 从文件夹构建 exFAT 镜像（BuildExfatImage / ReadUpcaseTable）
 Ntfs.py     NTFS 树与提取（基于 dissect.ntfs）
 Extract.py  共用提取引擎（原子替换、重名处理、递归）
 Util.py     路径、命名、时间戳等通用工具
 ```
 
-依赖方向必须单向：`Api → {Reader, Exfat, Ntfs, Vhd} → {Extract, Util, Model, Crypto, Errors}`，
-`Encrypt → {Keys, Model, Crypto, Util, Errors}`。
+依赖方向必须单向：`Api → {Reader, Exfat, ExfatBuild, Encrypt, Ntfs, Vhd} → {Extract, Util, Model, Crypto, Keys, Errors}`，
+`Encrypt → {Keys, Model, Crypto, Util, Errors}`，`ExfatBuild → {Util, Errors}`（不依赖 Reader）。
 
 - `Exfat.py` 与 `Ntfs.py` **不得**互相 import。两者共用的东西放 `Util.py` 或 `Extract.py`。
   历史上 `Ntfs.py` 反向 import `Exfat._UniqueName` / `Exfat._RemovePath`，已修正，别改回去。
@@ -100,6 +101,20 @@ def ExtractTree(OutputDirectory: PathType, Nodes: Sequence[ExtractNode], ...) ->
 - 不透明头部（约 2 MB）的内容未知，打包只能复制模板，**不要**试图自行生成。
 - 改动上述任何一条之前，先做「原镜像打包 == 原容器」的逐字节校验。
 
+### exFAT 构建器（`ExfatBuild.py`）
+
+- 生成布局固定镜像真实 OPTION 镜像：4096 字节扇区、4 KiB 簇、24 个引导扇区、
+  簇 2 = 分配位图、随后 upcase 表、再根目录。
+- 目录项（0x85/0xC0/0xC1）的 **条目集校验和**（16 位轮转，跳过主项第 2、3 字节）和
+  **名字哈希**（16 位轮转 + upcase 映射）必须正确，读取端会校验。
+- upcase 表的存储形式是**游程编码**（bit15 置位 = 该数量个恒等映射，否则 = 单个映射），
+  其校验和是**逐字节 32 位轮转**（不是 16 位）。
+- upcase 表优先从模板容器自带的 exFAT 镜像读取（`ReadUpcaseTable`），不要内嵌任何
+  厂商镜像里抠出来的数据块。
+- **不要**实现 NTFS 构建器。`.pack`/`.app` 的明文是「外层 NTFS 套 `internal_<n>.vhd`
+  套内层 NTFS」，需要完整 NTFS 格式化器；本仓库没有、也不该在没有挂载验证手段的环境里
+  手写。`PackFolder` 对这类模板抛 `UnsupportedContainerError` 是**有意为之**。
+
 ## 7. 测试与验证
 
 本仓库**不提交测试套件**，`tests/` 曾被有意删除，不要重新引入测试目录、测试框架
@@ -121,6 +136,9 @@ python -m ruff check FSDecrypt
   读、跨块连续读、虚拟容量截断。
 - 改 `Encrypt.py` 时，最低验证标准是「用原镜像打包得到与原容器逐字节相同的文件」，
   并再覆盖：改动内容后回读一致、尺寸非块整数倍时的填充、派生 IV（只给 Key）路径。
+- 改 `ExfatBuild.py` 时，验证闭环是「文件夹 → `BuildExfatImage` → 用 `ExfatVolume`
+  提取回来内容一致」，以及「文件夹 → `PackFolder` → `ExtractFiles` 一致」；两条都要
+  覆盖：普通文件、空文件、多级目录、文件名接近 15 字符边界的情况。
 
 ## 8. Git 约定
 

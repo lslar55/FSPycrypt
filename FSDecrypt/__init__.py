@@ -3,8 +3,9 @@ from .Api import (
     ExtractExfat,
     ExtractFiles,
     ExtractNtfs,
+    PackFolder,
 )
-from .Encrypt import EncryptFile
+from .Encrypt import ContainerExtension, EncryptFile, EncryptPages
 from .Errors import (
     FSDecryptError,
     InvalidContainerError,
@@ -14,8 +15,10 @@ from .Errors import (
     InvalidVhdError,
     MissingBaseError,
     MissingKeyError,
+    UnsupportedContainerError,
 )
 from .Exfat import ExfatEntry, ExfatNode, ExfatVolume
+from .ExfatBuild import BuildExfatImage, ReadUpcaseTable
 from .Model import BootId, ContainerType, Timestamp, Version
 from .Ntfs import NtfsNode, NtfsVolume
 from .Reader import FSDecryptReader, InspectContainer, OpenContainer
@@ -24,9 +27,12 @@ from ._version import __version__ as __version__
 
 __all__ = [
     "BootId",
+    "BuildExfatImage",
+    "ContainerExtension",
     "ContainerType",
     "DecryptFile",
     "EncryptFile",
+    "EncryptPages",
     "ExfatEntry",
     "ExfatNode",
     "ExfatVolume",
@@ -48,6 +54,9 @@ __all__ = [
     "OpenChainedVhdNtfs",
     "OpenContainer",
     "OpenVhdNtfs",
+    "PackFolder",
+    "ReadUpcaseTable",
     "Timestamp",
+    "UnsupportedContainerError",
     "Version",
 ]

@@ -1,0 +1,20 @@
+feat: 支持从文件夹直接打包 .opt 容器
+
+新增 ExfatBuild.py：自建符合规范的 exFAT 镜像
+- 布局对齐真实 OPTION 镜像：4096 字节扇区、4KiB 簇、24 个引导扇区、
+  簇 2 起依次为分配位图 / upcase 表 / 根目录
+- 目录项 0x85/0xC0/0xC1 的条目集校验和、名字哈希按规范计算
+- upcase 表为游程编码，优先从模板容器自带的 exFAT 镜像读取
+  （ReadUpcaseTable），不内嵌任何厂商镜像数据
+- 支持 VolumeSize：把镜像尺寸对齐到模板明文大小，使打包结果与原容器同尺寸
+- 超过模板容量的文件夹会自动扩大 BlockCount
+
+新增 PackFolder：文件夹 → exFAT 镜像 → EncryptFile → 容器，中间镜像写临时文件后删除
+
+Q: 为什么不支持 .pack/.app？
+A: 其明文是「外层 NTFS 套 internal_<n>.vhd 套内层 NTFS」，从零构造需要完整
+   NTFS 格式化器；本机无管理员权限、无法挂载验证，手写 NTFS 无法保证可用。
+   因此 PackFolder 对这类模板抛 UnsupportedContainerError，并在文档中说明。
+
+验证：170 文件真实文件夹往返一致；新增/改大文件往返一致；空文件、空目录、
+多级目录、13~200 字符文件名、中文名均往返一致。
